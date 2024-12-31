@@ -12,6 +12,18 @@ pub fn clear_screen() {
     clr_scr();
 }
 
+pub fn getch() -> Option<char> {
+    backend_getch()
+}
+
+pub fn init() {
+    backend_init()
+}
+
+pub fn deinit() {
+    backend_deinit()
+}
+
 impl Canvas {
     pub fn new(width: usize, height: usize) -> Self {
         let display_data: Vec<Vec<char>> = (0..height).map(|_| {

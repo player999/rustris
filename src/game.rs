@@ -2,6 +2,9 @@ use crate::ioscreen;
 use std::thread;
 use std::time::Duration;
 
+// Use rand crate
+use rand;
+
 const REFRESH_RATE_MSEC: u64 = 500;
 const GAME_CANVAS_WIDTH: usize = 80;
 const GAME_CANVAS_HEIGHT: usize = 25;
@@ -103,7 +106,7 @@ impl PositionOptions {
                 0 => Some(p1),
                 1 => Some(p2),
                 2 => Some(p3),
-                4 => Some(p3),
+                3 => Some(p4),
                 _ => None
             },
         }
@@ -137,6 +140,14 @@ impl Shape {
             coordinates.push((x as usize + rel_x, y as usize + rel_y));
         }
         coordinates
+    }
+
+    fn get_position_count(&self)->usize {
+        match self.get_position_options() {
+            PositionOptions::P1(_) => 1,
+            PositionOptions::P2(_, _) => 2,
+            PositionOptions::P4(_, _, _, _) => 4
+        }
     }
 }
 
@@ -201,21 +212,54 @@ impl ShapeState {
         ShapeState { shape, position, x, y}
     }
 
+    fn new_position(shape: &'static Shape, position: usize) -> Self {
+        let x = GLASS_WIDTH as usize / 2usize;
+        let y = 0usize;
+        let selected_position: usize = if shape.get_position_count() <= position {
+            0usize
+        } else {
+            position
+        };
+
+        ShapeState { shape, position: selected_position, x, y}
+    }
+
+    fn new_random() -> Self {
+        //Get random number from 0 to 6
+        let random_shape_idx = rand::random::<usize>() % SHAPES.len();
+        let random_position = rand::random::<usize>() % SHAPES[random_shape_idx].get_position_count();
+        Self::new_position(&SHAPES[random_shape_idx], random_position)
+    }
+
     fn get_coordinates(&self)->Vec<(usize, usize)> {
         self.shape.get_shape_coordinates(self.position as usize, self.x as usize, self.y as usize)
+    }
+}
+
+
+#[derive(PartialEq, Clone)]
+enum GlassPixel {
+    Empty,
+    Figure,
+    Frozen
+}
+
+impl Default for GlassPixel {
+    fn default()->Self {
+        GlassPixel::Empty
     }
 }
 
 pub struct Game {
     current_shape: ShapeState,
     screen_canvas: ioscreen::Canvas,
-    glass: [[bool; GLASS_WIDTH]; GLASS_HEIGHT],
+    glass: [[GlassPixel; GLASS_WIDTH]; GLASS_HEIGHT],
 }
 
 impl Game {
     pub fn new()->Self {
-        let mut glass: [[bool; GLASS_WIDTH]; GLASS_HEIGHT] = Default::default();
-        for t in &mut glass {t.fill(false)}
+        let mut glass: [[GlassPixel; GLASS_WIDTH]; GLASS_HEIGHT] = Default::default();
+        for t in &mut glass {t.fill(GlassPixel::Empty)}
 
         Game {
             current_shape: ShapeState::new(&TSHAPE),
@@ -224,17 +268,110 @@ impl Game {
         }
     }
 
-    fn update_glass_with_shape(&mut self) {
-        // Draw shape
-        let coordinates = self.current_shape.get_coordinates();
-        for (x, y) in coordinates {
-            self.glass[y][x] = true;
+    fn clear_shape_in_glass(&mut self) {
+        // Go through all pixela in glass and replace all Figure pixels with Empty
+        for y in 0..GLASS_HEIGHT {
+            for x in 0..GLASS_WIDTH {
+                if self.glass[y][x] == GlassPixel::Figure {
+                    self.glass[y][x] = GlassPixel::Empty;
+                }
+            }
         }
-
     }
 
-    fn update_glass(&mut self) {
-        self.update_glass_with_shape();
+    fn validate_coordinates(coordinates: &Vec<(usize, usize)>) -> bool {
+        // Check if any coordinates are outside the glass
+        for (x, y) in coordinates {
+            if *x >= GLASS_WIDTH || *y >= GLASS_HEIGHT {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn freeze_shape(&mut self) {
+        for y in 0..GLASS_HEIGHT {
+            for x in 0..GLASS_WIDTH {
+                if self.glass[y][x] == GlassPixel::Figure {
+                    self.glass[y][x] = GlassPixel::Frozen;
+                }
+            }
+        }
+    }
+
+    fn intersects_frozen_pixels(&self, coordinates: &Vec<(usize, usize)>) -> bool {
+        for y in 0..GLASS_HEIGHT {
+            for x in 0..GLASS_WIDTH {
+                if self.glass[y][x] == GlassPixel::Frozen {
+                    for (x1, y1) in coordinates {
+                        if *x1 == x && *y1 == y {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn update_glass_with_shape(&mut self, key_pressed: Option<char>)->bool {
+        let coordinates = self.current_shape.get_coordinates();
+        let is_valid_coordinates = Self::validate_coordinates(&coordinates);
+        if !is_valid_coordinates {
+            self.freeze_shape();
+            self.current_shape = ShapeState::new_random();
+            return false;
+        }
+
+        if let Some(key) = key_pressed {
+            let old_x = self.current_shape.x;
+            match key {
+                '7' => {
+                    self.current_shape.x = self.current_shape.x - 1;
+                }
+                '9' => {
+                    self.current_shape.x = self.current_shape.x + 1;
+                }
+                _ => {
+
+                }
+            }
+
+            let new_coordinates = self.current_shape.get_coordinates();
+            let new_is_valid_coordinates = Self::validate_coordinates(&new_coordinates);
+            if !new_is_valid_coordinates {
+                self.current_shape.x = old_x;
+            }
+            let intersects_frozen_pixels = self.intersects_frozen_pixels(&new_coordinates);
+            if intersects_frozen_pixels {
+                self.current_shape.x = old_x;
+            }
+        }
+
+        let intersects_frozen_pixels = self.intersects_frozen_pixels(&coordinates);
+        if intersects_frozen_pixels {
+            self.freeze_shape();
+            self.current_shape = ShapeState::new_random();
+            let new_coordinates = self.current_shape.get_coordinates();
+            let intersects_frozen_pixels = self.intersects_frozen_pixels(&new_coordinates);
+            if intersects_frozen_pixels {
+                return true;
+            } else {
+                return false;
+            }
+        }
+
+        //Clear shape in glass
+        self.clear_shape_in_glass();
+        // If shape is outside the glass, game over
+        for (x, y) in coordinates {
+            self.glass[y][x] = GlassPixel::Figure;
+        }
+        false
+    }
+
+    fn update_glass(&mut self, key: Option<char>)->bool {
+        self.update_glass_with_shape(key)
     }
 
     fn glass_lr()-> (usize, usize) {
@@ -255,7 +392,7 @@ impl Game {
         let (glass_left, _) = Self::glass_lr();
         for y in 0..GLASS_HEIGHT {
             for x in 0..GLASS_WIDTH {
-                let (char1, char2) = if self.glass[y][x] {('█', '█')} else {(' ', '.')};
+                let (char1, char2) = if self.glass[y][x] != GlassPixel::Empty {('█', '█')} else {(' ', '.')};
                 self.screen_canvas.set_char(glass_left + x*2 + 0, y, char1);
                 self.screen_canvas.set_char(glass_left + x*2 + 1, y, char2);
             }
@@ -312,14 +449,36 @@ impl Game {
         self.screen_canvas.display();
     }
 
+    fn draw_game_over(&mut self) {
+        let (left, right) = Self::glass_lr();
+        let game_over = "ИГРА ОКОНЧЕНА";
+        let press_space = "НАЖМИТЕ ПРОБЕЛ";
+        let start_game_over = ((right + left)/2) - (game_over.chars().count()/2);
+        let start_press_space = ((right + left)/2) - (press_space.chars().count()/2);
+        self.draw_glass();
+        self.draw_glass_outside();
+        self.draw_text(game_over, start_game_over, GAME_CANVAS_HEIGHT/2);
+        self.draw_text(press_space, start_press_space, (GAME_CANVAS_HEIGHT/2) + 1);
+        self.screen_canvas.display();
+    }
+
     pub fn game_loop(&mut self) {
         ioscreen::clear_screen();
-        self.current_shape = ShapeState::new(&SSHAPE);
+        let mut is_game_over = false;
+        self.current_shape = ShapeState::new_random();
         loop {
-            self.update_glass();
+            let key = ioscreen::getch();
+            if key == Some('q') {
+                return;
+            }
             self.screen_canvas.clear();
-            self.draw_frame();
-            self.current_shape.y += 1;
+            if is_game_over == false {
+                is_game_over = self.update_glass(key);
+                self.draw_frame();
+                self.current_shape.y += 1;
+            } else {
+                self.draw_game_over();
+            }
             thread::sleep(Duration::from_millis(REFRESH_RATE_MSEC));
         }
     }

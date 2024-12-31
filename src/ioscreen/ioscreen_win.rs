@@ -1,5 +1,9 @@
 use std::vec::Vec;
 use crossterm::{ExecutableCommand, terminal, cursor};
+use crossterm::event::{KeyCode, KeyEventKind};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::event;
+use std::time::Duration;
 use std::io::{stdout, Write};
 
 pub fn clr_scr() {
@@ -21,6 +25,34 @@ pub fn display(data: &Vec<Vec<char>>) {
     stdout.execute(cursor::MoveTo(0, 0)).unwrap();
 }
 
-pub fn getch() {
-    
+pub fn backend_init() {
+    let _ = enable_raw_mode();
+}
+
+pub fn backend_deinit() {
+    let _ = disable_raw_mode();
+}
+pub fn backend_getch()->Option<char> {
+    // Gets a single character from the user
+    // and returns it as a char
+    while let Ok(true) = event::poll(Duration::from_millis(10)) {
+        if let Ok(evt) = crossterm::event::read() {
+            if let crossterm::event::Event::Key(kevent) = evt {
+                if kevent.kind == KeyEventKind::Press {
+                    if let KeyCode::Char(ch) = kevent.code {
+                        return Some(ch);
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+            } else {
+                return None;
+            }
+        } else {
+            return None;
+        }
+    }
+    None
 }
