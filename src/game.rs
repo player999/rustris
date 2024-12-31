@@ -5,11 +5,14 @@ use std::time::Duration;
 // Use rand crate
 use rand;
 
-const REFRESH_RATE_MSEC: u64 = 500;
+const REFRESH_RATE_MSEC: u64 = 20;
+const MOVE_RATE_MSEC: u64 = 500;
+const SPEED_INCREMENT_STEP: u64 = 100;
 const GAME_CANVAS_WIDTH: usize = 80;
 const GAME_CANVAS_HEIGHT: usize = 25;
 const GLASS_WIDTH: usize = 10;
 const GLASS_HEIGHT: usize = 20;
+
 
 
 enum Position {
@@ -185,7 +188,7 @@ const TSHAPE: Shape = Shape::T(PositionOptions::P4(
         Position::P3x2([[true, true, true], [false, true, false]]),
         Position::P2x3([[false, true], [true, true], [false, true]]),
         Position::P3x2([[false, true, false], [true, true, true]]),
-        Position::P2x3([[true, false], [true, true], [true, true]])
+        Position::P2x3([[true, false], [true, true], [true, false]])
     )
 );
 
@@ -237,7 +240,7 @@ impl ShapeState {
 }
 
 
-#[derive(PartialEq, Clone)]
+#[derive(PartialEq, Clone, Copy)]
 enum GlassPixel {
     Empty,
     Figure,
@@ -314,6 +317,34 @@ impl Game {
         false
     }
 
+    fn is_row_full(&self, row: usize)->bool {
+        for x in 0..GLASS_WIDTH {
+            if self.glass[row][x] != GlassPixel::Frozen {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn explode_rows(&mut self) {
+        let mut new_glass: [[GlassPixel; GLASS_WIDTH]; GLASS_HEIGHT] = Default::default();
+        let mut row_idx = GLASS_HEIGHT - 1;
+        for y in (0..GLASS_HEIGHT).rev() {
+            if !self.is_row_full(y) {
+                new_glass[row_idx] = self.glass[y];
+                if row_idx > 0 {
+                    row_idx -= 1;
+                }
+            }
+        }
+
+        for y in 0..row_idx {
+            new_glass[y].fill(GlassPixel::Empty);
+        }
+
+        self.glass = new_glass;
+    }
+
     fn update_glass_with_shape(&mut self, key_pressed: Option<char>)->bool {
         let coordinates = self.current_shape.get_coordinates();
         let is_valid_coordinates = Self::validate_coordinates(&coordinates);
@@ -325,9 +356,16 @@ impl Game {
 
         if let Some(key) = key_pressed {
             let old_x = self.current_shape.x;
+            let old_position = self.current_shape.position;
             match key {
                 '7' => {
-                    self.current_shape.x = self.current_shape.x - 1;
+                    if self.current_shape.x > 0 {
+                        self.current_shape.x = self.current_shape.x - 1;
+                    }
+                }
+                '8' => {
+                    let new_position = (old_position + 1) % self.current_shape.shape.get_position_count();
+                    self.current_shape.position = new_position;
                 }
                 '9' => {
                     self.current_shape.x = self.current_shape.x + 1;
@@ -341,10 +379,12 @@ impl Game {
             let new_is_valid_coordinates = Self::validate_coordinates(&new_coordinates);
             if !new_is_valid_coordinates {
                 self.current_shape.x = old_x;
+                self.current_shape.position = old_position;
             }
             let intersects_frozen_pixels = self.intersects_frozen_pixels(&new_coordinates);
             if intersects_frozen_pixels {
                 self.current_shape.x = old_x;
+                self.current_shape.position = old_position;
             }
         }
 
@@ -363,7 +403,6 @@ impl Game {
 
         //Clear shape in glass
         self.clear_shape_in_glass();
-        // If shape is outside the glass, game over
         for (x, y) in coordinates {
             self.glass[y][x] = GlassPixel::Figure;
         }
@@ -444,6 +483,7 @@ impl Game {
 
     fn draw_frame(&mut self) {
         self.draw_glass();
+        self.explode_rows();
         self.draw_glass_inside();
         self.draw_glass_outside();
         self.screen_canvas.display();
@@ -466,20 +506,43 @@ impl Game {
         ioscreen::clear_screen();
         let mut is_game_over = false;
         self.current_shape = ShapeState::new_random();
+        let mut update_counter: u64 = 0u64;
+        const mov_rate: u64 = MOVE_RATE_MSEC;
+        let mut move_steps = mov_rate/REFRESH_RATE_MSEC;
+        let mut move_steps_changed = 0u64;
+        const speed_increment_step: u64 = SPEED_INCREMENT_STEP / REFRESH_RATE_MSEC;
+
+
         loop {
             let key = ioscreen::getch();
             if key == Some('q') {
                 return;
+            } else if key == Some('4') {
+                if move_steps > speed_increment_step {
+                    if move_steps_changed == 0 {
+                        move_steps_changed = move_steps - speed_increment_step;
+                    } else {
+                        if move_steps_changed > speed_increment_step {
+                            move_steps_changed = move_steps_changed - speed_increment_step;
+                        }
+                    }
+                }
             }
             self.screen_canvas.clear();
             if is_game_over == false {
                 is_game_over = self.update_glass(key);
                 self.draw_frame();
-                self.current_shape.y += 1;
+                if update_counter % move_steps == 0 {
+                    self.current_shape.y += 1;
+                    if move_steps_changed > 0 {
+                        move_steps = move_steps_changed;
+                        move_steps_changed = 0;
+                    }
+                }
             } else {
                 self.draw_game_over();
             }
-            thread::sleep(Duration::from_millis(REFRESH_RATE_MSEC));
-        }
+            update_counter += 1;
+        }   
     }
 }
